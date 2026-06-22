@@ -1,5 +1,5 @@
 # ==============================================================================
-# TBP KINEMATIC PIPELINE - PARALLEL MULTIPROCESSING ARCHITECTURE
+# TBP KINEMATIC PIPELINE - PARALLEL MULTIPROCESSING ARCHITECTURE (V2.1 ROBUST)
 # TARGET THRESHOLD: 215.11111111111 GeV
 # DATASET: RUN 2016G PFNANOAOD (DoubleEG & DoubleMuon) -> 1.3 TB SCALE
 # ==============================================================================
@@ -15,13 +15,14 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import concurrent.futures
+import subprocess
 
 # ------------------------------------------------------------------------------
 # 1. CONTROL PARAMETERS
 # ------------------------------------------------------------------------------
 TBP_THRESHOLD = 215.11111111111
 MAX_FILES = 5000
-MAX_WORKERS = 16 # Menggunakan 16 core dari 24 core EPYC untuk stabilitas I/O
+MAX_WORKERS = 16 
 
 print("\n==================================================")
 print(" ☢️ OPERATION: OMNICIDE (1.3 TB INGESTION - MULTIPROCESSING) ☢️ ")
@@ -35,7 +36,7 @@ all_target_urls = []
 # ------------------------------------------------------------------------------
 # 2. MANIFEST EXTRACTION
 # ------------------------------------------------------------------------------
-print("[PROCESS] Reading raw XRootD coordinates from local text files...")
+print("[PROCESS] Reading raw XRootD coordinates from local text files...", flush=True)
 
 for txt_file in TXT_FILES:
     if os.path.exists(txt_file):
@@ -43,11 +44,11 @@ for txt_file in TXT_FILES:
             with open(txt_file, 'r') as f:
                 links = [line.strip() for line in f if line.strip().startswith('root://')]
                 all_target_urls.extend(links)
-            print(f"[STATUS] Coordinates extracted successfully from {txt_file}.")
+            print(f"[STATUS] Coordinates extracted successfully from {txt_file}.", flush=True)
         except Exception as e:
-            print(f"[ERROR] Failed to read {txt_file}: {e}")
+            print(f"[ERROR] Failed to read {txt_file}: {e}", flush=True)
     else:
-        print(f"[FATAL ERROR] {txt_file} not found in the current directory! Download it first.")
+        print(f"[FATAL ERROR] {txt_file} not found in the current directory! Download it first.", flush=True)
 
 all_target_urls = list(set(all_target_urls))
 
@@ -55,13 +56,12 @@ if not all_target_urls:
     raise RuntimeError("\n[FATAL] No coordinates found. Terminating.")
 
 all_target_urls = all_target_urls[:MAX_FILES]
-print(f"\n[STATUS] AMMO LOADED! Total .root files queued: {len(all_target_urls)}")
+print(f"\n[STATUS] AMMO LOADED! Total .root files queued: {len(all_target_urls)}", flush=True)
 
 # ------------------------------------------------------------------------------
 # 3. WORKER FUNCTION (CORE ENGINE)
 # ------------------------------------------------------------------------------
 def process_file(target):
-    """Fungsi mandiri untuk di-eksekusi secara paralel oleh setiap core CPU."""
     temp_root = f"temp_{uuid.uuid4().hex}.root"
     local_results = {
         "di_photon_mass": [], 
@@ -71,13 +71,22 @@ def process_file(target):
         "success": False
     }
     
-    # DOWNLOAD PHASE (Muted log output to prevent console spam)
-    exit_code = os.system(f"xrdcp -f -s {target} {temp_root} > /dev/null 2>&1")
+    # DOWNLOAD PHASE DENGAN ANTI-ZOMBIE (TIMEOUT 3 MENIT)
+    try:
+        subprocess.run(
+            ["xrdcp", "-f", "-s", target, temp_root],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=180,  # Akan di-kill otomatis kalau XRootD nyangkut/freeze
+            check=True
+        )
+    except Exception:
+        # Silent fail jika download timeout atau error
+        if os.path.exists(temp_root):
+            os.remove(temp_root)
+        return local_results 
     
-    if exit_code != 0 or not os.path.exists(temp_root):
-        return local_results # Download failed
-    
-    # EXTRACTION PHASE (LOGIKA FISIKA TIDAK DIUBAH SAMA SEKALI)
+    # EXTRACTION PHASE
     try:
         with uproot.open(f"{temp_root}:Events") as events:
             chunk = events.arrays(["nPhoton", "Photon_pt", "Photon_eta", "Photon_phi",
@@ -114,7 +123,7 @@ def process_file(target):
         local_results["success"] = True
         
     except Exception:
-        pass # Corrupted matrix silent fail untuk menjaga pool tetap berjalan
+        pass 
     
     finally:
         # DELETION PHASE (Eat & Burn)
@@ -126,16 +135,14 @@ def process_file(target):
 # ------------------------------------------------------------------------------
 # 4. PARALLEL EXECUTION LOOP
 # ------------------------------------------------------------------------------
-print(f"\n[PROCESS] Initiating Multiprocessing Pool with {MAX_WORKERS} workers...")
+print(f"\n[PROCESS] Initiating Multiprocessing Pool with {MAX_WORKERS} workers...", flush=True)
 start_time = time.time()
 
 global_results = {"di_photon_mass": [], "four_lepton_mass": [], "met_distribution": []}
 total_events = 0
 processed_files = 0
 
-# Menggunakan ProcessPoolExecutor untuk full CPU core utilization
 with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-    # Map the worker function to all target URLs
     futures = {executor.submit(process_file, url): url for url in all_target_urls}
     
     for i, future in enumerate(concurrent.futures.as_completed(futures), 1):
@@ -145,7 +152,6 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor
             total_events += res["events"]
             processed_files += 1
             
-            # Aggregate array results
             if res["di_photon_mass"]:
                 global_results["di_photon_mass"].extend(res["di_photon_mass"])
             if res["four_lepton_mass"]:
@@ -153,20 +159,24 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor
             if res["met_distribution"]:
                 global_results["met_distribution"].extend(res["met_distribution"])
                 
-        # Status update per file kelar (karena paralel, urutan berantakan, jadi pakai counter)
-        if i % 10 == 0 or i == len(all_target_urls):
-            print(f"[STATUS] Progress: {i}/{len(all_target_urls)} files processed | Cumulative Events: {total_events}")
+        # Update log pertama untuk memastikan jalan
+        if i == 1:
+            print(f"[STATUS] ⚡ First file successfully extracted! Engine running...", flush=True)
+
+        # Update per 5 file dengan forced flush
+        if i % 5 == 0 or i == len(all_target_urls):
+            print(f"[STATUS] Progress: {i}/{len(all_target_urls)} files requested | Extracted: {processed_files} | Events: {total_events}", flush=True)
 
 exec_time = time.time() - start_time
-print(f"\n[INFO] OPERATION COMPLETE.")
-print(f"[INFO] Total files successfully parsed: {processed_files}/{len(all_target_urls)}")
-print(f"[INFO] Total events evaluated: {total_events}")
-print(f"[INFO] Total execution time: {exec_time/60:.2f} minutes")
+print(f"\n[INFO] OPERATION COMPLETE.", flush=True)
+print(f"[INFO] Total files successfully parsed: {processed_files}/{len(all_target_urls)}", flush=True)
+print(f"[INFO] Total events evaluated: {total_events}", flush=True)
+print(f"[INFO] Total execution time: {exec_time/60:.2f} minutes", flush=True)
 
 # ------------------------------------------------------------------------------
-# 5. DATA VISUALIZATION AND CSV EXPORT (TIDAK DIUBAH)
+# 5. DATA VISUALIZATION AND CSV EXPORT
 # ------------------------------------------------------------------------------
-print("[PROCESS] Generating TBP Diagnostic Render...")
+print("[PROCESS] Generating TBP Diagnostic Render...", flush=True)
 
 fig, axs = plt.subplots(3, 1, figsize=(15, 18))
 plt.subplots_adjust(hspace=0.4)
@@ -218,5 +228,9 @@ if len(golden_met) > 0:
         for i, val in enumerate(golden_met):
             f.write(f"Anomali_{i+1},{val:.6f}\n")
 
-print("\n[SUCCESS] Render secured as 'TBP_Final_Discovery.png'.")
-print(f"[SUCCESS] {len(golden_met)} anomalous 5-Sigma events isolated in CSV.")
+# WAJIB EXPORT ARRAY AGAR TBP_ZSCORE.PY BISA MENGHITUNG STATISTIKNYA
+if len(global_results["met_distribution"]) > 0:
+    np.save("met_all_distribution.npy", np.concatenate(global_results["met_distribution"]))
+
+print("\n[SUCCESS] Render secured as 'TBP_Final_Discovery.png'.", flush=True)
+print(f"[SUCCESS] {len(golden_met)} anomalous 5-Sigma events isolated in CSV.", flush=True)
