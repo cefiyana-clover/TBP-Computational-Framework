@@ -1,6 +1,6 @@
 # ==============================================================================
 # STATISTICAL SIGNIFICANCE CALCULATOR - SIDEBAND ESTIMATION
-# METHOD: Model-Independent Symmetric Sideband Estimation
+# METHOD: Model-Independent Symmetric Sideband Estimation (LHC Standard)
 # TARGET: 215.11111111111 GeV
 # ==============================================================================
 
@@ -38,17 +38,17 @@ if os.path.exists(DATA_FILE):
         
     except Exception as e:
         print(f"[ERROR] Gagal membaca file npy: {e}. Inisialisasi input manual.")
-        n_obs = int(input(f"Input n_obs ({SR_LOW:.2f}-{SR_HIGH:.2f} GeV): "))
-        n_lsb = int(input(f"Input n_lsb ({LSB_LOW:.2f}-{LSB_HIGH:.2f} GeV): "))
-        n_rsb = int(input(f"Input n_rsb ({RSB_LOW:.2f}-{RSB_HIGH:.2f} GeV): "))
+        n_obs = int(float(input(f"Input n_obs ({SR_LOW:.2f}-{SR_HIGH:.2f} GeV): ")))
+        n_lsb = int(float(input(f"Input n_lsb ({LSB_LOW:.2f}-{LSB_HIGH:.2f} GeV): ")))
+        n_rsb = int(float(input(f"Input n_rsb ({RSB_LOW:.2f}-{RSB_HIGH:.2f} GeV): ")))
 else:
     print(f"[WARNING] File '{DATA_FILE}' tidak ditemukan. Inisialisasi input manual.")
-    n_obs = int(input(f"Input n_obs ({SR_LOW:.2f}-{SR_HIGH:.2f} GeV): "))
-    n_lsb = int(input(f"Input n_lsb ({LSB_LOW:.2f}-{LSB_HIGH:.2f} GeV): "))
-    n_rsb = int(input(f"Input n_rsb ({RSB_LOW:.2f}-{RSB_HIGH:.2f} GeV): "))
+    n_obs = int(float(input(f"Input n_obs ({SR_LOW:.2f}-{SR_HIGH:.2f} GeV): ")))
+    n_lsb = int(float(input(f"Input n_lsb ({LSB_LOW:.2f}-{LSB_HIGH:.2f} GeV): ")))
+    n_rsb = int(float(input(f"Input n_rsb ({RSB_LOW:.2f}-{RSB_HIGH:.2f} GeV): ")))
 
 # ------------------------------------------------------------------------------
-# 3. MATRIKS BACKGROUND (MODEL-INDEPENDENT)
+# 3. MATRIKS BACKGROUND & UNCERTAINTY (MODEL-INDEPENDENT)
 # ------------------------------------------------------------------------------
 w_sr = SR_HIGH - SR_LOW    
 w_sb = (LSB_HIGH - LSB_LOW) + (RSB_HIGH - RSB_LOW)  
@@ -58,6 +58,10 @@ alpha = w_sr / w_sb
 n_sideband = n_lsb + n_rsb
 n_bkg = alpha * n_sideband
 
+# Menghitung varians/ketidakpastian background dari sideband (Poisson Error)
+sigma_b_sq = (alpha**2) * n_sideband
+sigma_b = np.sqrt(sigma_b_sq)
+
 print("\n--------------------------------------------------")
 print("[DATA] EVENT CONTINGENCY MATRIX")
 print("--------------------------------------------------")
@@ -65,18 +69,24 @@ print(f" Signal Region (SR)   [{SR_LOW:.2f} - {SR_HIGH:.2f} GeV] : {n_obs} event
 print(f" Left Sideband (LSB)  [{LSB_LOW:.2f} - {LSB_HIGH:.2f} GeV] : {n_lsb} events")
 print(f" Right Sideband (RSB) [{RSB_LOW:.2f} - {RSB_HIGH:.2f} GeV] : {n_rsb} events")
 print(f" Total Sideband Control                      : {n_sideband} events")
-print(f" Estimated Background (N_bkg)                : {n_bkg:.4f} events")
+print(f" Estimated Background (N_bkg)                : {n_bkg:.4f} ± {sigma_b:.4f} events")
 
 # ------------------------------------------------------------------------------
-# 4. KALKULASI Z-SCORE
+# 4. KALKULASI Z-SCORE DENGAN BACKGROUND UNCERTAINTY (COWAN ET AL.)
 # ------------------------------------------------------------------------------
 if n_bkg <= 0:
     print("\n[ERROR] Background absolut tidak mencukupi untuk kalkulasi statistik.")
 else:
-    z_standard = (n_obs - n_bkg) / np.sqrt(n_bkg)
+    # Standard Significance dengan background variance
+    z_standard = (n_obs - n_bkg) / np.sqrt(n_bkg + sigma_b_sq)
     
+    # Profile Likelihood Ratio Asimov (Cowan et al. 2011, Eq 114)
     if n_obs > 0:
-        z_lhc = np.sqrt(2 * (n_obs * np.log(n_obs / n_bkg) - (n_obs - n_bkg)))
+        term1 = n_obs * np.log((n_obs * (n_bkg + sigma_b_sq)) / (n_bkg**2 + n_obs * sigma_b_sq))
+        term2 = (n_bkg**2 / sigma_b_sq) * np.log(1 + (sigma_b_sq * (n_obs - n_bkg)) / (n_bkg * (n_bkg + sigma_b_sq)))
+        z_lhc = np.sqrt(2 * (term1 - term2))
+        
+        # Koreksi arah signifikansi (defisit vs ekses)
         if n_obs < n_bkg:
             z_lhc = -z_lhc
     else:
@@ -85,8 +95,8 @@ else:
     print("\n--------------------------------------------------")
     print("[METRICS] SIGNIFICANCE EVALUATION (Z-SCORE)")
     print("--------------------------------------------------")
-    print(f" Standard Significance (S/√B)   : {z_standard:.4f} Sigma")
-    print(f" Profile Likelihood Ratio (LHC) : {z_lhc:.4f} Sigma")
+    print(f" Standard Significance (S/√(B+ΔB²)) : {z_standard:.4f} Sigma")
+    print(f" Profile Likelihood Ratio (Cowan)  : {z_lhc:.4f} Sigma")
     print("--------------------------------------------------")
     
     print("\n[STATUS] STATISTICAL CONCLUSION:")
