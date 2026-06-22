@@ -85,8 +85,8 @@ for idx, target in enumerate(all_target_urls):
             current_events = len(chunk["MET_pt"])
             total_events += current_events
             
-            # Channel 1: Di-Photon
-            if "nPhoton" in chunk.fields:
+            # Channel 1: Di-Photon (SUDAH DIREVISI)
+            if "nPhoton" in chunk.keys():
                 mask_2ph = chunk["nPhoton"] >= 2
                 if ak.any(mask_2ph):
                     g1 = vector.zip({"pt": chunk["Photon_pt"][mask_2ph, 0], "eta": chunk["Photon_eta"][mask_2ph, 0], 
@@ -97,16 +97,16 @@ for idx, target in enumerate(all_target_urls):
                     ph_mass = (g1[ph_cut] + g2[ph_cut]).mass
                     results["di_photon_mass"].append(ak.to_numpy(ph_mass[ph_mass > 150])) 
 
-            # Channel 2: Four-Lepton
-            if "nElectron" in chunk.fields and "nMuon" in chunk.fields:
+            # Channel 2: Four-Lepton (SUDAH DIREVISI)
+            if "nElectron" in chunk.keys() and "nMuon" in chunk.keys():
                 tot_lep = chunk["nElectron"] + chunk["nMuon"]
                 mask_4l = tot_lep >= 4
                 if ak.any(mask_4l):
                     total_4l_pt = ak.sum(chunk["Electron_pt"][mask_4l], axis=-1) + ak.sum(chunk["Muon_pt"][mask_4l], axis=-1)
                     results["four_lepton_mass"].append(ak.to_numpy(total_4l_pt[total_4l_pt > 150]))
 
-            # Channel 3: MET
-            if "MET_pt" in chunk.fields:
+            # Channel 3: MET (SUDAH DIREVISI)
+            if "MET_pt" in chunk.keys():
                 met_data = chunk["MET_pt"]
                 results["met_distribution"].append(ak.to_numpy(met_data[met_data > 100])) 
             
@@ -182,5 +182,3 @@ if len(golden_met) > 0:
 
 print("\n[SUCCESS] Render secured as 'TBP_Final_Discovery.png'.")
 print(f"[SUCCESS] {len(golden_met)} anomalous 5-Sigma events isolated in CSV.")
-
-
