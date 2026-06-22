@@ -182,3 +182,10 @@ if len(golden_met) > 0:
 
 print("\n[SUCCESS] Render secured as 'TBP_Final_Discovery.png'.")
 print(f"[SUCCESS] {len(golden_met)} anomalous 5-Sigma events isolated in CSV.")
+
+# ------------------------------------------------------------------------------
+# 5. DATA EXPORT FOR Z-SCORE CALCULATION
+# ------------------------------------------------------------------------------
+if results["met_distribution"]:
+    np.save("met_all_distribution.npy", met_all)
+    print("[SUCCESS] Raw MET distribution saved securely for Z-score validation.")
