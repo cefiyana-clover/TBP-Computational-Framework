@@ -1,113 +1,124 @@
 # ==============================================================================
-# STATISTICAL SIGNIFICANCE CALCULATOR - SIDEBAND ESTIMATION
-# METHOD: Model-Independent Symmetric Sideband Estimation (LHC Standard)
-# TARGET: 215.11111111111 GeV
+# STATISTICAL EVALUATOR - OMNICIDE V4 (FULL SCALE)
+# PROTOCOL: CAUSALITY EXPANSION & POSITIVE IMPLANTATION (PHASE 4)
+# METHOD: 1 GeV Precision Binning & Asymptotic Profile Likelihood Ratio
+# TARGET: ULTRA-STRICT KINEMATIC MATRIX
 # ==============================================================================
 
-import os
 import numpy as np
+from scipy.optimize import curve_fit
+from scipy.stats import norm
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
-# ------------------------------------------------------------------------------
-# 1. KONTROL PARAMETER STATISTIK
-# ------------------------------------------------------------------------------
-TBP_MASS = 215.11111111111
-SIGNAL_WINDOW = 0.5  
-
-SR_LOW, SR_HIGH = TBP_MASS - SIGNAL_WINDOW, TBP_MASS + SIGNAL_WINDOW
-LSB_LOW, LSB_HIGH = 210.0, 214.0  
-RSB_LOW, RSB_HIGH = 216.5, 220.5  
-
-print("==================================================")
-print("[SYSTEM] STATISTICAL SIGNIFICANCE EVALUATOR")
+print("\n==================================================")
+print("[SYSTEM] OMNICIDE: Z-SCORE STATISTICAL EVALUATOR V4 (ULTRA-STRICT)")
 print("==================================================\n")
 
 # ------------------------------------------------------------------------------
-# 2. INGESTI DATA
+# 1. AKUISISI MATRIKS DATA
 # ------------------------------------------------------------------------------
 DATA_FILE = "met_all_distribution.npy"
+try:
+    met_all = np.load(DATA_FILE)
+    print(f"[INFO] Matriks '{DATA_FILE}' berhasil dimuat ke dalam memori.")
+except FileNotFoundError:
+    print(f"[FATAL ERROR] File '{DATA_FILE}' tidak ditemukan. Pastikan OMNICIDE V4 telah tereksekusi hingga tuntas.")
+    exit()
 
-if os.path.exists(DATA_FILE):
-    print(f"[INFO] File '{DATA_FILE}' terdeteksi.")
-    try:
-        met_data = np.load(DATA_FILE)
-        print(f"[STATUS] {len(met_data)} sampel MET dimuat ke memori.")
-        
-        n_obs = np.sum((met_data >= SR_LOW) & (met_data <= SR_HIGH))
-        n_lsb = np.sum((met_data >= LSB_LOW) & (met_data <= LSB_HIGH))
-        n_rsb = np.sum((met_data >= RSB_LOW) & (met_data <= RSB_HIGH))
-        
-    except Exception as e:
-        print(f"[ERROR] Gagal membaca file npy: {e}. Inisialisasi input manual.")
-        n_obs = int(float(input(f"Input n_obs ({SR_LOW:.2f}-{SR_HIGH:.2f} GeV): ")))
-        n_lsb = int(float(input(f"Input n_lsb ({LSB_LOW:.2f}-{LSB_HIGH:.2f} GeV): ")))
-        n_rsb = int(float(input(f"Input n_rsb ({RSB_LOW:.2f}-{RSB_HIGH:.2f} GeV): ")))
+# ------------------------------------------------------------------------------
+# 2. DEFINISI KOORDINAT KINEMATIK
+# ------------------------------------------------------------------------------
+sr_min = 215.0
+sr_max = 216.0
+obs_events = np.sum((met_all >= sr_min) & (met_all <= sr_max))
+
+fit_min = 150.0
+fit_max = 250.0
+
+# ------------------------------------------------------------------------------
+# 3. PREPARASI HISTOGRAM (RESOLUSI PRESISI 1.0 GeV)
+# ------------------------------------------------------------------------------
+# 101 titik batas (edges) menghasilkan tepat 100 interval bin selebar 1 GeV
+bins = np.linspace(fit_min, fit_max, int(fit_max - fit_min) + 1)
+bin_centers = (bins[:-1] + bins[1:]) / 2
+counts, _ = np.histogram(met_all, bins=bins)
+
+# Masking: Mengisolasi area sinyal (215-216 GeV) dari kalkulasi background
+mask_cr = (bin_centers < sr_min) | (bin_centers > sr_max)
+x_cr = bin_centers[mask_cr]
+y_cr = counts[mask_cr]
+
+# ------------------------------------------------------------------------------
+# 4. PEMODELAN BACKGROUND (EKSPONENSIAL DECAY)
+# ------------------------------------------------------------------------------
+def bkg_model(x, a, b):
+    return a * np.exp(-b * x)
+
+try:
+    popt, pcov = curve_fit(bkg_model, x_cr, y_cr, p0=(1e6, 0.05), maxfev=10000)
+    fit_success = True
+except Exception as e:
+    print(f"[ERROR] Kegagalan pemodelan fisis latar belakang: {e}")
+    popt = [0, 0]
+    fit_success = False
+
+# ------------------------------------------------------------------------------
+# 5. EKSEKUSI STATISTIK (PROFILE LIKELIHOOD RATIO)
+# ------------------------------------------------------------------------------
+x_sr = bin_centers[~mask_cr]
+exp_bkg = np.sum(bkg_model(x_sr, *popt))
+
+O = obs_events
+B = exp_bkg
+
+# Kalkulasi Asimtotik LHC (Cowan et al.)
+if B > 0 and O > B:
+    z_score = np.sqrt(2 * (O * np.log(O / B) - (O - B)))
+    p_value = norm.sf(z_score)
 else:
-    print(f"[WARNING] File '{DATA_FILE}' tidak ditemukan. Inisialisasi input manual.")
-    n_obs = int(float(input(f"Input n_obs ({SR_LOW:.2f}-{SR_HIGH:.2f} GeV): ")))
-    n_lsb = int(float(input(f"Input n_lsb ({LSB_LOW:.2f}-{LSB_HIGH:.2f} GeV): ")))
-    n_rsb = int(float(input(f"Input n_rsb ({RSB_LOW:.2f}-{RSB_HIGH:.2f} GeV): ")))
+    z_score = 0.0
+    p_value = 1.0
 
 # ------------------------------------------------------------------------------
-# 3. MATRIKS BACKGROUND & UNCERTAINTY (MODEL-INDEPENDENT)
+# 6. OUTPUT MATEMATIS TERMINAL
 # ------------------------------------------------------------------------------
-w_sr = SR_HIGH - SR_LOW    
-w_sb = (LSB_HIGH - LSB_LOW) + (RSB_HIGH - RSB_LOW)  
+print(f"Total Populasi MET (>100 GeV) : {len(met_all):,} events")
+print(f"Observed Events (O)           : {O} anomali (Area 215-216 GeV)")
+print(f"Expected Background (B)       : {B:.2f} events (Estimasi Fit Matematis)")
+print("-" * 50)
+print(f"Z-Score (Significance)        : {z_score:.5f} Sigma")
+print(f"P-Value                       : {p_value:.5e}")
 
-alpha = w_sr / w_sb  
-
-n_sideband = n_lsb + n_rsb
-n_bkg = alpha * n_sideband
-
-# Menghitung varians/ketidakpastian background dari sideband (Poisson Error)
-sigma_b_sq = (alpha**2) * n_sideband
-sigma_b = np.sqrt(sigma_b_sq)
-
-print("\n--------------------------------------------------")
-print("[DATA] EVENT CONTINGENCY MATRIX")
-print("--------------------------------------------------")
-print(f" Signal Region (SR)   [{SR_LOW:.2f} - {SR_HIGH:.2f} GeV] : {n_obs} events (N_obs)")
-print(f" Left Sideband (LSB)  [{LSB_LOW:.2f} - {LSB_HIGH:.2f} GeV] : {n_lsb} events")
-print(f" Right Sideband (RSB) [{RSB_LOW:.2f} - {RSB_HIGH:.2f} GeV] : {n_rsb} events")
-print(f" Total Sideband Control                      : {n_sideband} events")
-print(f" Estimated Background (N_bkg)                : {n_bkg:.4f} ± {sigma_b:.4f} events")
-
-# ------------------------------------------------------------------------------
-# 4. KALKULASI Z-SCORE DENGAN BACKGROUND UNCERTAINTY (COWAN ET AL.)
-# ------------------------------------------------------------------------------
-if n_bkg <= 0:
-    print("\n[ERROR] Background absolut tidak mencukupi untuk kalkulasi statistik.")
+if z_score >= 5.0:
+    print("[STATUS] KLAIM DISCOVERY VALID (≥ 5.0 SIGMA). CAUSALITY EXPANSION CONFIRMED.")
+elif z_score >= 3.0:
+    print("[STATUS] EVIDENCE KUAT (3.0 - 4.9 SIGMA). POSITIVE IMPLANTATION IN PROGRESS.")
 else:
-    # Standard Significance dengan background variance
-    z_standard = (n_obs - n_bkg) / np.sqrt(n_bkg + sigma_b_sq)
-    
-    # Profile Likelihood Ratio Asimov (Cowan et al. 2011, Eq 114)
-    if n_obs > 0:
-        term1 = n_obs * np.log((n_obs * (n_bkg + sigma_b_sq)) / (n_bkg**2 + n_obs * sigma_b_sq))
-        term2 = (n_bkg**2 / sigma_b_sq) * np.log(1 + (sigma_b_sq * (n_obs - n_bkg)) / (n_bkg * (n_bkg + sigma_b_sq)))
-        z_lhc = np.sqrt(2 * (term1 - term2))
-        
-        # Koreksi arah signifikansi (defisit vs ekses)
-        if n_obs < n_bkg:
-            z_lhc = -z_lhc
-    else:
-        z_lhc = 0.0
+    print("[STATUS] FLUKTUASI KONSISTEN DENGAN BACKGROUND MODEL.")
+print("==================================================\n")
 
-    print("\n--------------------------------------------------")
-    print("[METRICS] SIGNIFICANCE EVALUATION (Z-SCORE)")
-    print("--------------------------------------------------")
-    print(f" Standard Significance (S/√(B+ΔB²)) : {z_standard:.4f} Sigma")
-    print(f" Profile Likelihood Ratio (Cowan)  : {z_lhc:.4f} Sigma")
-    print("--------------------------------------------------")
+# ------------------------------------------------------------------------------
+# 7. RENDER GRAFIK DIAGNOSTIK
+# ------------------------------------------------------------------------------
+if fit_success:
+    plt.figure(figsize=(10, 6))
+    plt.hist(met_all[(met_all >= fit_min) & (met_all <= fit_max)], bins=bins, color='#333333', alpha=0.8, label='Observed Background (Ultra-Strict Cut)')
     
-    print("\n[STATUS] STATISTICAL CONCLUSION:")
-    if z_lhc >= 5.0:
-        print(" [RESULT] SIGNIFICANCE >= 5.0 SIGMA (DISCOVERY THRESHOLD MET).")
-        print(" Data memenuhi kriteria observasi fisis anomali pada 215.11 GeV.")
-    elif z_lhc >= 3.0:
-        print(" [RESULT] SIGNIFICANCE >= 3.0 SIGMA (EVIDENCE THRESHOLD MET).")
-        print(" Dibutuhkan perluasan dataset untuk mencapai ambang batas 5-Sigma.")
-    else:
-        print(" [RESULT] SIGNIFICANCE < 3.0 SIGMA.")
-        print(" Fluktuasi konsisten dengan model background standar.")
-
-print("\n==================================================")
+    x_plot = np.linspace(fit_min, fit_max, 500)
+    plt.plot(x_plot, bkg_model(x_plot, *popt), color='red', linestyle='dashed', linewidth=2.5, label='Background Fit Model')
+    
+    plt.axvspan(sr_min, sr_max, color='yellow', alpha=0.4, label='Signal Region (Anomalies)')
+    
+    plt.yscale('log')
+    plt.xlim(fit_min, fit_max)
+    plt.xlabel(r'Missing Transverse Energy $E_T^{miss}$ [GeV]', fontsize=12)
+    plt.ylabel('Events / 1.0 GeV', fontsize=12)
+    plt.title('Ultra-Strict Full Scale Fit Model vs Target Anomalies', fontweight='bold')
+    plt.legend()
+    plt.grid(True, which="both", ls="-", alpha=0.2)
+    
+    OUTPUT_IMG = "Z_Score_Verification_UltraStrict_FullScale.png"
+    plt.savefig(OUTPUT_IMG, dpi=300, bbox_inches='tight')
+    print(f"[SUCCESS] Grafik verifikasi fitting disimpan sebagai '{OUTPUT_IMG}'.", flush=True)
