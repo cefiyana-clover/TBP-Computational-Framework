@@ -1,12 +1,11 @@
 # ==============================================================================
-# TBP KINEMATIC PIPELINE - PARALLEL MULTIPROCESSING ARCHITECTURE (V2.1 ROBUST)
-# TARGET THRESHOLD: 215.11111111111 GeV
-# DATASET: RUN 2016G PFNANOAOD (DoubleEG & DoubleMuon) -> 1.3 TB SCALE
+# AUTOMATED KINEMATIC PIPELINE - OMNICIDE V4 (FULL SCALE)
+# PROTOCOL: CAUSALITY EXPANSION & POSITIVE IMPLANTATION (PHASE 4)
+# TARGET: 215.11111111111 GeV | ULTRA-STRICT KINEMATIC DILEPTON CUT
 # ==============================================================================
 
 import os
 import time
-import uuid
 import uproot
 import awkward as ak
 import vector
@@ -18,132 +17,118 @@ import concurrent.futures
 import subprocess
 
 # ------------------------------------------------------------------------------
-# 1. CONTROL PARAMETERS
+# PARAMETER KONTROL SKALA PENUH
 # ------------------------------------------------------------------------------
 TBP_THRESHOLD = 215.11111111111
-MAX_FILES = 5000
-MAX_WORKERS = 16 
+MAX_FILES = 100000   # Segel Terbuka: Eksekusi Tanpa Batas
+MAX_WORKERS = 32     # Optimalisasi CPU EPYC/Xeon (High Concurrency)
 
 print("\n==================================================")
-print(" ☢️ OPERATION: OMNICIDE (1.3 TB INGESTION - MULTIPROCESSING) ☢️ ")
+print(" ☢️ OPERATION: OMNICIDE V4 (FULL SCALE 13 TeV) ☢️ ")
 print("==================================================\n")
-print(f"[INFO] Target threshold: {TBP_THRESHOLD} GeV")
-print(f"[INFO] Execution Mode: Parallel Iterative Deletion ({MAX_WORKERS} Workers)")
 
-TXT_FILES = ["DoubleMuon_files.txt", "DoubleEG_files.txt"]
+# ------------------------------------------------------------------------------
+# 1. AKUISISI MANIFES OTONOM (API INTEGRATION)
+# ------------------------------------------------------------------------------
+# Terintegrasi 13 Record ID (DoubleMuon, DoubleEG, EGamma, SingleMuon, SingleElectron, MET, JetHT, HTMHT, dll)
+RECORD_IDS = [31304, 31305, 31306, 31307, 31309, 31313, 31312, 390, 31303, 31308, 31311, 31314, 31310]
 all_target_urls = []
 
-# ------------------------------------------------------------------------------
-# 2. MANIFEST EXTRACTION
-# ------------------------------------------------------------------------------
-print("[PROCESS] Reading raw XRootD coordinates from local text files...", flush=True)
+print("[PROCESS] Mengakuisisi manifes XRootD langsung dari server CERN Open Data...")
+for recid in RECORD_IDS:
+    print(f" -> Menarik koordinat untuk Record ID: {recid}...")
+    try:
+        # Pemanggilan cernopendata-client secara mekanistik dari dalam Python
+        result = subprocess.run(
+            ["cernopendata-client", "get-file-locations", "--recid", str(recid), "--protocol", "xrootd"],
+            capture_output=True, text=True, check=True
+        )
+        urls = result.stdout.strip().split('\n')
+        valid_urls = [url.strip() for url in urls if url.strip().startswith('root://')]
+        all_target_urls.extend(valid_urls)
+        print(f"    [STATUS] Terkunci {len(valid_urls)} file dari Record {recid}.")
+    except Exception as e:
+        print(f"    [ERROR] Kegagalan akses Record {recid}. Pastikan 'cernopendata-client' terinstal. Detail: {e}")
 
-for txt_file in TXT_FILES:
-    if os.path.exists(txt_file):
-        try:
-            with open(txt_file, 'r') as f:
-                links = [line.strip() for line in f if line.strip().startswith('root://')]
-                all_target_urls.extend(links)
-            print(f"[STATUS] Coordinates extracted successfully from {txt_file}.", flush=True)
-        except Exception as e:
-            print(f"[ERROR] Failed to read {txt_file}: {e}", flush=True)
-    else:
-        print(f"[FATAL ERROR] {txt_file} not found in the current directory! Download it first.", flush=True)
-
-all_target_urls = list(set(all_target_urls))
+all_target_urls = list(set(all_target_urls))[:MAX_FILES]
 
 if not all_target_urls:
-    raise RuntimeError("\n[FATAL] No coordinates found. Terminating.")
+    print("[FATAL] Tidak ada URL XRootD yang valid terdeteksi. Eksekusi dihentikan.")
+    exit()
 
-all_target_urls = all_target_urls[:MAX_FILES]
-print(f"\n[STATUS] AMMO LOADED! Total .root files queued: {len(all_target_urls)}", flush=True)
+print(f"\n[STATUS] TOTAL AMUNISI TERKUNCI: {len(all_target_urls)} file XRootD\n", flush=True)
 
 # ------------------------------------------------------------------------------
-# 3. WORKER FUNCTION (CORE ENGINE)
+# 2. MESIN EKSTRAKSI ASINKRON (ULTRA-STRICT DILEPTON CUT)
 # ------------------------------------------------------------------------------
-def process_file(target):
-    temp_root = f"temp_{uuid.uuid4().hex}.root"
+def stream_and_analyze(url):
     local_results = {
-        "di_photon_mass": [], 
-        "four_lepton_mass": [], 
-        "met_distribution": [], 
-        "events": 0,
-        "success": False
+        "di_photon_mass": [], "four_lepton_mass": [], "met_distribution": [], 
+        "events": 0, "success": False
     }
     
-    # DOWNLOAD PHASE DENGAN ANTI-ZOMBIE (TIMEOUT 3 MENIT)
-    try:
-        subprocess.run(
-            ["xrdcp", "-f", "-s", target, temp_root],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=180,  # Akan di-kill otomatis kalau XRootD nyangkut/freeze
-            check=True
-        )
-    except Exception:
-        # Silent fail jika download timeout atau error
-        if os.path.exists(temp_root):
-            os.remove(temp_root)
-        return local_results 
-    
-    # EXTRACTION PHASE
-    try:
-        with uproot.open(f"{temp_root}:Events") as events:
-            chunk = events.arrays(["nPhoton", "Photon_pt", "Photon_eta", "Photon_phi",
-                                   "nElectron", "Electron_pt", "nMuon", "Muon_pt", "MET_pt"], 
-                                   how=dict, library="ak")
-            
-            local_results["events"] = len(chunk["MET_pt"])
-            
-            # Channel 1: Di-Photon
-            if "nPhoton" in chunk.keys():
-                mask_2ph = chunk["nPhoton"] >= 2
-                if ak.any(mask_2ph):
-                    g1 = vector.zip({"pt": chunk["Photon_pt"][mask_2ph, 0], "eta": chunk["Photon_eta"][mask_2ph, 0], 
-                                     "phi": chunk["Photon_phi"][mask_2ph, 0], "mass": 0})
-                    g2 = vector.zip({"pt": chunk["Photon_pt"][mask_2ph, 1], "eta": chunk["Photon_eta"][mask_2ph, 1], 
-                                     "phi": chunk["Photon_phi"][mask_2ph, 1], "mass": 0})
-                    ph_cut = (g1.pt > 40) & (g2.pt > 40) & (abs(g1.eta) < 2.5) & (abs(g2.eta) < 2.5) & (abs(g1.deltaphi(g2)) > 2.5)
-                    ph_mass = (g1[ph_cut] + g2[ph_cut]).mass
-                    local_results["di_photon_mass"].append(ak.to_numpy(ph_mass[ph_mass > 150])) 
+    for attempt in range(3):
+        try:
+            with uproot.open(f"{url}:Events", timeout=180) as events:
+                chunk = events.arrays(["nPhoton", "Photon_pt", "Photon_eta", "Photon_phi",
+                                       "nElectron", "Electron_pt", "Electron_eta", 
+                                       "nMuon", "Muon_pt", "Muon_eta", "MET_pt"], 
+                                       how=dict, library="ak")
+                
+                local_results["events"] = len(chunk["MET_pt"])
+                
+                # --- CHANNEL 1: DI-PHOTON ---
+                if "nPhoton" in chunk.keys():
+                    mask_2ph = chunk["nPhoton"] >= 2
+                    if ak.any(mask_2ph):
+                        g1 = vector.zip({"pt": chunk["Photon_pt"][mask_2ph, 0], "eta": chunk["Photon_eta"][mask_2ph, 0], "phi": chunk["Photon_phi"][mask_2ph, 0], "mass": 0})
+                        g2 = vector.zip({"pt": chunk["Photon_pt"][mask_2ph, 1], "eta": chunk["Photon_eta"][mask_2ph, 1], "phi": chunk["Photon_phi"][mask_2ph, 1], "mass": 0})
+                        ph_cut = (g1.pt > 40) & (g2.pt > 40) & (abs(g1.eta) < 2.5) & (abs(g2.eta) < 2.5) & (abs(g1.deltaphi(g2)) > 2.5)
+                        ph_mass = (g1[ph_cut] + g2[ph_cut]).mass
+                        local_results["di_photon_mass"].append(ak.to_numpy(ph_mass[ph_mass > 150])) 
 
-            # Channel 2: Four-Lepton
-            if "nElectron" in chunk.keys() and "nMuon" in chunk.keys():
-                tot_lep = chunk["nElectron"] + chunk["nMuon"]
-                mask_4l = tot_lep >= 4
-                if ak.any(mask_4l):
-                    total_4l_pt = ak.sum(chunk["Electron_pt"][mask_4l], axis=-1) + ak.sum(chunk["Muon_pt"][mask_4l], axis=-1)
-                    local_results["four_lepton_mass"].append(ak.to_numpy(total_4l_pt[total_4l_pt > 150]))
+                # --- CHANNEL 2: FOUR-LEPTON ---
+                if "nElectron" in chunk.keys() and "nMuon" in chunk.keys():
+                    tot_lep = chunk["nElectron"] + chunk["nMuon"]
+                    mask_4l = tot_lep >= 4
+                    if ak.any(mask_4l):
+                        total_4l_pt = ak.sum(chunk["Electron_pt"][mask_4l], axis=-1) + ak.sum(chunk["Muon_pt"][mask_4l], axis=-1)
+                        local_results["four_lepton_mass"].append(ak.to_numpy(total_4l_pt[total_4l_pt > 150]))
 
-            # Channel 3: MET
-            if "MET_pt" in chunk.keys():
-                met_data = chunk["MET_pt"]
-                local_results["met_distribution"].append(ak.to_numpy(met_data[met_data > 100])) 
-        
-        local_results["success"] = True
-        
-    except Exception:
-        pass 
-    
-    finally:
-        # DELETION PHASE (Eat & Burn)
-        if os.path.exists(temp_root):
-            os.remove(temp_root)
+                # --- CHANNEL 3: MET DENGAN ULTRA-STRICT KINEMATIC CUT ---
+                if "MET_pt" in chunk.keys() and "nElectron" in chunk.keys() and "nMuon" in chunk.keys():
+                    
+                    # 1. Tameng Energi & Geometri: p_T > 30 GeV DAN Abs(eta) < 2.4 (Pusat Detektor)
+                    valid_electrons = ak.sum((chunk["Electron_pt"] > 30.0) & (abs(chunk["Electron_eta"]) < 2.4), axis=-1)
+                    valid_muons = ak.sum((chunk["Muon_pt"] > 30.0) & (abs(chunk["Muon_eta"]) < 2.4), axis=-1)
+                    
+                    # 2. Syarat Topologi Ketat: Jumlah lepton valid HARUS TEPAT 2
+                    mask_2l_strict = (valid_electrons + valid_muons) == 2
+                    
+                    if ak.any(mask_2l_strict):
+                        met_data = chunk["MET_pt"][mask_2l_strict]
+                        # Simpan hanya MET di atas 100 GeV
+                        local_results["met_distribution"].append(ak.to_numpy(met_data[met_data > 100])) 
+            
+            local_results["success"] = True
+            break 
+            
+        except Exception as e:
+            # Meminimalisir log spam pada skala ratusan ribu file
+            if attempt == 2:
+                print(f"[ERROR] Gagal membaca {url.split('/')[-1]} | Tipe: {type(e).__name__}", flush=True)
+            time.sleep(3)
             
     return local_results
 
-# ------------------------------------------------------------------------------
-# 4. PARALLEL EXECUTION LOOP
-# ------------------------------------------------------------------------------
-print(f"\n[PROCESS] Initiating Multiprocessing Pool with {MAX_WORKERS} workers...", flush=True)
 start_time = time.time()
-
 global_results = {"di_photon_mass": [], "four_lepton_mass": [], "met_distribution": []}
 total_events = 0
 processed_files = 0
 
-with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-    futures = {executor.submit(process_file, url): url for url in all_target_urls}
+print(f"[PROCESS] Memulai eksekusi threading ({MAX_WORKERS} Workers)...", flush=True)
+with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    futures = {executor.submit(stream_and_analyze, url): url for url in all_target_urls}
     
     for i, future in enumerate(concurrent.futures.as_completed(futures), 1):
         res = future.result()
@@ -151,33 +136,22 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor
         if res["success"]:
             total_events += res["events"]
             processed_files += 1
-            
-            if res["di_photon_mass"]:
-                global_results["di_photon_mass"].extend(res["di_photon_mass"])
-            if res["four_lepton_mass"]:
-                global_results["four_lepton_mass"].extend(res["four_lepton_mass"])
-            if res["met_distribution"]:
-                global_results["met_distribution"].extend(res["met_distribution"])
+            if res["di_photon_mass"]: global_results["di_photon_mass"].extend(res["di_photon_mass"])
+            if res["four_lepton_mass"]: global_results["four_lepton_mass"].extend(res["four_lepton_mass"])
+            if res["met_distribution"]: global_results["met_distribution"].extend(res["met_distribution"])
                 
-        # Update log pertama untuk memastikan jalan
-        if i == 1:
-            print(f"[STATUS] ⚡ First file successfully extracted! Engine running...", flush=True)
-
-        # Update per 5 file dengan forced flush
-        if i % 5 == 0 or i == len(all_target_urls):
-            print(f"[STATUS] Progress: {i}/{len(all_target_urls)} files requested | Extracted: {processed_files} | Events: {total_events}", flush=True)
+        # Interval pelaporan diperlebar (per 50 file) agar log terminal lebih stabil
+        if i % 50 == 0 or i == len(all_target_urls):
+            print(f"[STATUS] Diproses: {i}/{len(all_target_urls)} | Sukses: {processed_files} | Akumulasi Events: {total_events:,}", flush=True)
 
 exec_time = time.time() - start_time
-print(f"\n[INFO] OPERATION COMPLETE.", flush=True)
-print(f"[INFO] Total files successfully parsed: {processed_files}/{len(all_target_urls)}", flush=True)
-print(f"[INFO] Total events evaluated: {total_events}", flush=True)
-print(f"[INFO] Total execution time: {exec_time/60:.2f} minutes", flush=True)
+print(f"\n[INFO] OPERASI SELESAI. Ekstraksi Berhasil: {processed_files}/{len(all_target_urls)}", flush=True)
+print(f"[INFO] Waktu Eksekusi: {exec_time/3600:.2f} Jam", flush=True)
 
 # ------------------------------------------------------------------------------
-# 5. DATA VISUALIZATION AND CSV EXPORT
+# 3. KONSOLIDASI DATA DAN VISUALISASI
 # ------------------------------------------------------------------------------
-print("[PROCESS] Generating TBP Diagnostic Render...", flush=True)
-
+print("[PROCESS] Mengkompilasi matriks diagnostik...", flush=True)
 fig, axs = plt.subplots(3, 1, figsize=(15, 18))
 plt.subplots_adjust(hspace=0.4)
 
@@ -208,29 +182,23 @@ if global_results["met_distribution"]:
     
     golden_mask = (met_all >= 215.0) & (met_all <= 216.0)
     golden_met = met_all[golden_mask]
+    
+    # Pengamanan absolut array MET untuk analisis Z-Score independen
+    np.save("met_all_distribution.npy", met_all)
 
 axs[2].axvline(x=TBP_THRESHOLD, color='red', linestyle='dashed', linewidth=3)
 axs[2].set_title(r'Channel 3: Missing Transverse Energy $E_T^{miss}$', fontweight='bold', color='white')
 axs[2].set_facecolor('black')
 axs[2].set_xlim(180, 250)
 
-for ax in axs:
-    ax.tick_params(colors='white')
-    ax.spines['bottom'].set_color('white')
-    ax.spines['left'].set_color('white')
+for ax in axs: ax.tick_params(colors='white'); ax.spines['bottom'].set_color('white'); ax.spines['left'].set_color('white')
 
 fig.patch.set_facecolor('#121212')
-plt.savefig("TBP_Final_Discovery.png", dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor(), edgecolor='none')
+plt.savefig("TBP_Final_Discovery_FullScale.png", dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor(), edgecolor='none')
 
 if len(golden_met) > 0:
-    with open("TBP_Discovery_Anomalies.csv", "w") as f:
+    with open("TBP_Discovery_Anomalies_FullScale.csv", "w") as f:
         f.write("Index,MET_GeV\n")
-        for i, val in enumerate(golden_met):
-            f.write(f"Anomali_{i+1},{val:.6f}\n")
+        for i, val in enumerate(golden_met): f.write(f"Anomali_{i+1},{val:.6f}\n")
 
-# WAJIB EXPORT ARRAY AGAR TBP_ZSCORE.PY BISA MENGHITUNG STATISTIKNYA
-if len(global_results["met_distribution"]) > 0:
-    np.save("met_all_distribution.npy", np.concatenate(global_results["met_distribution"]))
-
-print("\n[SUCCESS] Render secured as 'TBP_Final_Discovery.png'.", flush=True)
-print(f"[SUCCESS] {len(golden_met)} anomalous 5-Sigma events isolated in CSV.", flush=True)
+print(f"[SUCCESS] {len(golden_met)} anomali disimpan dan matriks met_all_distribution.npy diamankan.", flush=True)
