@@ -1,0 +1,6 @@
+numpy>=1.24.0
+scipy>=1.10.0
+sympy>=1.12
+matplotlib>=3.7.0
+h5py>=3.8.0
+requests>=2.31.0
